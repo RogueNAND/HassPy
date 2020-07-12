@@ -44,9 +44,15 @@ class HomeAssistant:
         self.entities = {}
         self.scheduler = Schedule()
         self.load_entities()
-        self.message_id = 10
+        self._message_id = 10
+        self.watch_events = {}
         threading.Thread(target=self._start_all).start()
         # threading.Thread(target=self._run_scheduler).start()
+
+    @property
+    def message_id(self):
+        self._message_id += 1
+        return self._message_id
 
     def get_entity(self, entity_id) -> Entity:
         return self.entities.get(entity_id, None)
@@ -71,7 +77,6 @@ class HomeAssistant:
         print(f"Loaded {len(self.entities)} entities")
 
     def call_service(self, entity_id, data):
-        self.message_id += 1
         data.update({
             'id': self.message_id,
             'domain': entity_id.split('.')[0],
@@ -82,6 +87,21 @@ class HomeAssistant:
         })
         print("call:", data)
         loop.create_task(self.ws.send(json.dumps(data)))
+
+    def onevent(self, event: str):
+
+        """ Calls wrapped function when a HomeAssistant event on the specified entity_ids is called """
+
+        def decorator(func):
+
+            # Add event:func to watch list
+            self.watch_events.setdefault(event, []).append(func)
+
+            @wraps(func)
+            def inner(*args, **kwargs):
+                func(*args, **kwargs)
+            return inner
+        return decorator
 
     def onchange(self, *entity_ids):
 
@@ -129,8 +149,12 @@ class HomeAssistant:
 
         # Subscribe all
         await self.ws.send(json.dumps(
-            {'id': 1, 'type': 'subscribe_events', 'event_type': 'state_changed'}
+            {'id': self.message_id, 'type': 'subscribe_events', 'event_type': 'state_changed'}
         ))
+        # Make sure we are subscribed all @onevent() updates
+        for event in self.watch_events:
+            print("Subscribing to", event)
+            await self.ws.send(json.dumps({'id': self.message_id, 'type': 'subscribe_events', 'event_type': event}))
 
         loop.create_task(self._callback_loop())
         while True:
@@ -146,10 +170,17 @@ class HomeAssistant:
                 break
 
             if message['type'] == 'event':
+                event_type = message['event']['event_type']
                 data = message['event']['data']
-                entity = self.get_entity(data['entity_id'])
+                if event_type == 'state_changed':
+                    entity = self.get_entity(data['entity_id'])
 
-                if entity:
-                    entity.state = data['new_state']['state']
-                    for func in watch_entities.get(entity.id, []):
-                        func(entity)
+                    if entity:
+                        entity.state = data['new_state']['state']
+                        for func in watch_entities.get(entity.id, []):
+                            func(entity)
+                        # for func in self.watch_events
+                elif event_type in self.watch_events:
+                    for func in self.watch_events[event_type]:
+                        func(data)
+
