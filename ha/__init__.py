@@ -1,0 +1,1 @@
+from .hass import HomeAssistant
