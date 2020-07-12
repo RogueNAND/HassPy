@@ -83,15 +83,16 @@ class HomeAssistant:
         print("call:", data)
         loop.create_task(self.ws.send(json.dumps(data)))
 
-    def onchange(self, entity_id):
+    def onchange(self, *entity_ids):
 
         """ Calls wrapped function when the specified entity_id is updated """
 
         def decorator(func):
             # Add function to watch list
-            if entity_id not in watch_entities:
-                watch_entities[entity_id] = []
-            watch_entities[entity_id].append(func)
+            for entity_id in entity_ids:
+                if entity_id not in watch_entities:
+                    watch_entities[entity_id] = []
+                watch_entities[entity_id].append(func)
 
             @wraps(func)
             def inner(*args, **kwargs):
