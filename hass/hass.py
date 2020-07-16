@@ -1,165 +1,126 @@
-from .entity import Entity, entity_classes
-import asyncio, asyncws, threading
-import json, time, requests
+import asyncio, asyncws, threading, json, requests
 from functools import wraps
+from .schedule import Schedule
+from .entity import Entity
 
 loop = asyncio.get_event_loop()
-
-watch_entities = {}
-
-
-class Schedule:
-    def __init__(self):
-        self.scheduled_functions = {}
-
-    def delay_function(self, func, seconds, *args, **kwargs):
-        self.scheduled_functions[func] = (time.time() + seconds, args, kwargs)
-        print("Scheduler:", func)
-
-    def cancel_function(self, func):
-        if func in self.scheduled_functions:
-            del self.scheduled_functions[func]
-            print("Scheduler canceled:", func)
-
-    def run(self):
-        current_time = time.time()
-        functions_to_run = []
-        for func, values in self.scheduled_functions.items():
-            t, args, kwargs = values
-            if current_time > t:
-                functions_to_run.append((func, args, kwargs))
-
-        for func, args, kwargs in functions_to_run:
-            print("Running delayed function:", func)
-            func(*args, **kwargs)
-            del self.scheduled_functions[func]
+scheduler = Schedule(loop)
 
 
+class Event(Entity):
+    def __getattr__(self, item):
+        # Override in case attribute doesn't exist yet
+        return None
+
+
+class EventListener:
+
+    """ Listen for HA event on specific entity
+
+    :param event_type: HomeAssistant event to subscribe to
+    :param id: period-separated string representing the entity id path in the event json
+    :return:
+    """
+
+    def __init__(self, event_type, id):
+        self.event_type = event_type
+        self.entity_id_json_keys = id.split('.')
+        self.id_listeners = {}
+
+    def add_id_listener(self, ha, id, entity):
+        ha.ensure_subscribed(self)
+        self.id_listeners.setdefault(ha, {})[id] = entity
+
+    def call(self, hass_parent, msg):
+        # Extract entity_id
+        id = msg
+        for key in self.entity_id_json_keys:
+            id = id[key]
+
+        # Call entity
+        if id in self.id_listeners[hass_parent]:
+            entity = self.id_listeners[hass_parent][id]
+            entity._set_attributes_from_json(msg['data'])
+            entity.call(msg)
+
+
+    def __call__(self, ha, id):
+        event = Event(ha, id)
+        self.add_id_listener(ha, id, event)
+        return event
+
+
+entity_state_changed_event = EventListener('state_changed', id='data.new_state.entity_id')
 class HomeAssistant:
 
     def __init__(self, url, token):
+        # Connection
         self.rest_url = f"http://{url}/api/"
         self.ws_url = f"ws://{url}/api/websocket"
         self.token = token
-        self.entities = {}
-        self.scheduler = Schedule()
-        self.load_entities()
         self._message_id = 10
-        self.watch_events = {}
-        threading.Thread(target=self._start_all).start()
-        # threading.Thread(target=self._run_scheduler).start()
+
+        # Events+Entities
+        self._event_listeners = {}
+
+        # Run
+        loop.run_until_complete(self._connect_websocket())
+        threading.Thread(target=lambda: loop.run_until_complete(self._callback_loop())).start()
+
+    def init_entities(self):
+        i = 0
+        if (active_entity_list := entity_state_changed_event.id_listeners.get(self)):
+            entity_list = requests.get(self.rest_url + "states", headers={
+                "Authorization": f"Bearer {self.token}",
+                "content-type": "application/json",
+            }).json()
+            for o in entity_list:
+                entity_id = o['entity_id']
+
+                if (entity := active_entity_list.get(entity_id)):
+                    entity._set_attributes_from_json(o['attributes'], state=o.get('state'))
+                    i += 1
+
+        print(f"Loaded {i} entities")
 
     @property
     def message_id(self):
         self._message_id += 1
         return self._message_id
 
-    def get_entity(self, entity_id) -> Entity:
-        return self.entities.get(entity_id, None)
+    def ensure_subscribed(self, event_listener):
+        event_type = event_listener.event_type
+        if event_type not in self._event_listeners:
+            print("Subscribing to", event_type)
+            loop.create_task(
+                self.ws.send(json.dumps({
+                    'id': self.message_id,
+                    'type': 'subscribe_events',
+                    'event_type': event_type
+                }))
+            )
+            self._event_listeners[event_type] = event_listener
 
-    def _start_all(self):
-        loop.run_until_complete(self._connect_websocket())
-
-    def load_entities(self):
-        entity_list = requests.get(self.rest_url + "states", headers={
-            "Authorization": f"Bearer {self.token}",
-            "content-type": "application/json",
-        }).json()
-        for o in entity_list:
-            entity_id = o['entity_id']
-            domain = entity_id.split('.')[0]
-
-            if entity_id not in self.entities and domain in entity_classes:
-                new_entity = entity_classes[domain](ha=self, id=entity_id, state=o['state'])
-                # for attr, value in o['attributes'].items():
-                #     setattr(new_entity, attr, value)
-                self.entities[entity_id] = new_entity
-        print(f"Loaded {len(self.entities)} entities")
-
-    def call_service(self, entity_id, data):
-        data.update({
+    def call_service(self, entity, data):
+        data.update({'entity_id': entity.id})
+        call = {
             'id': self.message_id,
-            'domain': entity_id.split('.')[0],
+            'domain': entity.id.split('.')[0],
             'type': "call_service",
-            'service_data': {
-                'entity_id': entity_id
-            }
-        })
-        print("call:", data)
-        loop.create_task(self.ws.send(json.dumps(data)))
+            'service': entity.compute_service(),
+            'service_data': data
+        }
+        print("call:", call)
+        loop.create_task(self.ws.send(json.dumps(call)))
 
-    def onevent(self, event: str):
-
-        """ Calls wrapped function when a HomeAssistant event on the specified entity_ids is called """
-
-        def decorator(func):
-
-            # Add event:func to watch list
-            self.watch_events.setdefault(event, []).append(func)
-
-            @wraps(func)
-            def inner(*args, **kwargs):
-                func(*args, **kwargs)
-            return inner
-        return decorator
-
-    def onchange(self, *entity_ids):
-
-        """ Calls wrapped function when the specified entity_id is updated """
-
-        def decorator(func):
-            # Add function to watch list
-            for entity_id in entity_ids:
-                if entity_id not in watch_entities:
-                    watch_entities[entity_id] = []
-                watch_entities[entity_id].append(func)
-
-            @wraps(func)
-            def inner(*args, **kwargs):
-                func(*args, **kwargs)
-            return inner
-        return decorator
-
-    def postpone(self, seconds):
-
-        """ Delays the calling of a function
-
-        When the wrapped function is called, it is placed in a holding area until:
-            - The delay time has passed
-            - The function is called again, in which case the delay timer is reset
-            - The function is cancelled (called with 'cancel=True') and removed from the scheduler entirely
-        When the delay time runs out, the function is finally called
-        """
-
-        def decorator(func):
-            @wraps(func)
-            def inner(*args, **kwargs):
-                if kwargs.get('cancel'):
-                    self.scheduler.cancel_function(func)
-                else:
-                    self.scheduler.delay_function(func, seconds, *args, **kwargs)
-            return inner
-        return decorator
+    def add_entity_listener(self, id, entity):
+        entity_state_changed_event.add_id_listener(self, id, entity)
 
     async def _connect_websocket(self):
         self.ws = await asyncws.connect(self.ws_url)
 
         # Authenticate
         await self.ws.send(json.dumps({'type': 'auth', 'access_token': self.token}))
-
-        # Subscribe all
-        await self.ws.send(json.dumps(
-            {'id': self.message_id, 'type': 'subscribe_events', 'event_type': 'state_changed'}
-        ))
-        # Make sure we are subscribed all @onevent() updates
-        for event in self.watch_events:
-            print("Subscribing to", event)
-            await self.ws.send(json.dumps({'id': self.message_id, 'type': 'subscribe_events', 'event_type': event}))
-
-        loop.create_task(self._callback_loop())
-        while True:
-            await asyncio.sleep(1)
-            self.scheduler.run()
 
     async def _callback_loop(self):
         while True:
@@ -170,17 +131,36 @@ class HomeAssistant:
                 break
 
             if message['type'] == 'event':
-                event_type = message['event']['event_type']
-                data = message['event']['data']
-                if event_type == 'state_changed':
-                    entity = self.get_entity(data['entity_id'])
+                event_msg = message['event']
+                event_type = event_msg['event_type']
+                if event_type in self._event_listeners:
+                    self._event_listeners[event_type].call(self, event_msg)
 
-                    if entity:
-                        entity.state = data['new_state']['state']
-                        for func in watch_entities.get(entity.id, []):
-                            func(entity)
-                        # for func in self.watch_events
-                elif event_type in self.watch_events:
-                    for func in self.watch_events[event_type]:
-                        func(data)
 
+import inspect
+class Room:
+
+    _methods_to_watch = {}
+
+    def __init__(self):
+        # Get all entities
+        self._entities = inspect.getmembers(self, lambda a: isinstance(a, Entity))
+
+        # Assign onchange() functions to their respective entities
+        for func, entities in self._methods_to_watch.items():
+            func = getattr(self, func.__name__)
+            if not entities:
+                for name, entity in self._entities:
+                    entity.add_event_call(func)
+            else:
+                for entity in entities:
+                    entity.add_event_call(func)
+
+    def onchange(*entities):
+        def decorator(func):
+            Room._methods_to_watch[func] = entities
+            @wraps(func)
+            def inner(*args, **kwargs):
+                return func(*args, **kwargs)
+            return inner
+        return decorator
