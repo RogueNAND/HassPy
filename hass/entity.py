@@ -10,13 +10,11 @@ def push(func):
         if thread_id in push_threads:
             func(*args, **kwargs)
         else:
-            print("Start")
             push_threads[thread_id] = set()
             func(*args, **kwargs)
             for entity in push_threads[thread_id]:
                 entity.push_changes_to_ha()
             del push_threads[thread_id]
-            print("End")
     return inner
 
 
@@ -32,6 +30,12 @@ class Entity:
         self.event_calls = set()
         self.state = None
         self._modified_values = {}
+
+    def toggle(self):
+        if self.state is True:
+            self.state = False
+        elif self.state is False:
+            self.state = True
 
     def add_event_call(self, func):
         self.event_calls.add(func)
@@ -71,6 +75,8 @@ class Entity:
             self.state = False
 
     def push_changes_to_ha(self):
+        if 'state' in self._modified_values:
+            del self._modified_values['state']
         self.ha.call_service(self, {k: v for k, v in self._modified_values.items()})
         object.__setattr__(self, '_modified_values', {})
 
@@ -141,16 +147,34 @@ class Group:
         for entity in self.entities:
             entity.add_event_call(func)
 
+    def _call_method(self, entities, name):
+        for entity in entities:
+            getattr(entity, name)()
+
     def __getattr__(self, item):
 
         """ Culminate children values into a single value """
 
-        entities = [e for e in self.entities if hasattr(e, item)]
-        value = sum([
-            getattr(entity, item)
-            for entity in entities
-        ]) / len(entities)
-        return value
+        # Get applicable entities
+        entities = [
+            e for e in self.entities
+            if hasattr(e, item)
+        ]
+
+        if entities:
+            # If method
+            for e in entities:
+                if callable(getattr(e, item)):
+                    return lambda: self._call_method(entities, item)
+
+            # Otherwise, take average value
+            value = sum([
+                getattr(entity, item)
+                for entity in entities
+            ]) / len(entities)
+            return value
+        else:
+            return None
 
     def __setattr__(self, key, value):
 

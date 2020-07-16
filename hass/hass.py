@@ -129,6 +129,7 @@ class HomeAssistant:
 
             if message is None:
                 break
+            print(message)
 
             if message['type'] == 'event':
                 event_msg = message['event']
