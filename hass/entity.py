@@ -161,6 +161,9 @@ class Group:
         for entity in entities:
             getattr(entity, name)()
 
+    def __iter__(self):
+        return self.entities.__iter__()
+
     def __getattr__(self, item):
 
         """ Culminate children values into a single value """
@@ -177,6 +180,21 @@ class Group:
                 if callable(getattr(e, item)):
                     return lambda: self._call_method(entities, item)
 
+            all_values = [
+                getattr(e, item)
+                for e in entities
+            ]
+
+            # Remove Falsy values except 0
+            values = [
+                v for v in all_values
+                if v or v == 0
+            ]
+
+            # Check if all values are equal
+            if len(set(values)) == 1:
+                return values[0]
+
             # Otherwise, take average value
             value = sum([
                 getattr(entity, item)
@@ -191,7 +209,7 @@ class Group:
         """ Pass off attribute values to children """
 
         if self.__getattribute__('__initialized'):
-            entities = [e for e in self.entities if hasattr(e, key)]
+            entities = [e for e in self.entities]
             for e in entities:
                 setattr(e, key, value)
         else:
