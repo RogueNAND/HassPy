@@ -54,7 +54,16 @@ class Entity:
     @push
     def _call_watched_methods(self, data):
         for func in self.event_calls:
-            func(self, data)
+            scene_activator = func(self, data)
+
+            if scene_activator:
+                # Run all, if multiple
+                if isinstance(scene_activator, tuple):
+                    for activator in scene_activator:
+                        activator.run()
+                else:
+                    scene_activator.run()
+
 
     def _set_attributes_from_json(self, data, state=None):
         if 'new_state' in data:
@@ -81,6 +90,7 @@ class Entity:
         object.__setattr__(self, '_modified_values', {})
 
     def compute_service(self):
+        """ Override this method """
         return None
 
     def __setattr__(self, key, value):
@@ -132,9 +142,9 @@ class Group:
         object.__setattr__(self, '__initialized', False)
 
         self.entities = entities
-        entity_type = type(entities[0])
+        entity_domain = entities[0]._domain
         for e in entities:
-            assert isinstance(e, entity_type)
+            assert e._domain == entity_domain
         self.event_calls = set()
 
         object.__setattr__(self, '__initialized', True)
