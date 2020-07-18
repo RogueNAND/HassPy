@@ -129,9 +129,12 @@ class HomeAssistant:
 
             if message is None:
                 break
-            print(message)
 
-            if message['type'] == 'event':
+            if not message.get('success', True):
+                e = message.get('error', {})
+                print(f"ERROR - {e.get('code')}: {e.get('message')}")
+
+            elif message['type'] == 'event':
                 event_msg = message['event']
                 event_type = event_msg['event_type']
                 if event_type in self._event_listeners:
