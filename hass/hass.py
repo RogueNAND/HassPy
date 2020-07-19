@@ -1,10 +1,7 @@
 import asyncio, asyncws, threading, json, requests
 from functools import wraps
-from .schedule import Schedule
+from .schedule import loop, scheduler
 from .entity import Entity
-
-loop = asyncio.get_event_loop()
-scheduler = Schedule(loop)
 
 
 class Event(Entity):

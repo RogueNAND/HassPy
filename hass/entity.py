@@ -1,22 +1,6 @@
-from functools import wraps
-import threading, time
-
-push_threads = {}
-def push(func):
-
-    @wraps(func)
-    def inner(*args, **kwargs):
-        thread_id = threading.get_ident()
-        if thread_id in push_threads:
-            func(*args, **kwargs)
-        else:
-            push_threads[thread_id] = set()
-            result = func(*args, **kwargs)
-            for entity in push_threads[thread_id]:
-                entity.push_changes_to_ha()
-            del push_threads[thread_id]
-            return result
-    return inner
+import threading, time, math
+from .hass import scheduler
+from .push import push, push_threads
 
 
 class Entity:
@@ -97,15 +81,23 @@ class Entity:
     """ Scene control """
 
     def add_scene(self, scene, delay=0):
-        if delay > 0:
+        if delay > 1:
             time_to_run = time.time() + delay
+
+            # Remove all scenes that were currently scheduled after this new scene
+            for t in filter(lambda x: x[0] + 1 >= time_to_run, self.scenes.values()):
+                del self.scenes[t]
+
+            # Schedule the new scene
             self.scenes[time_to_run] = scene
-            # TODO: Schedule run_scene_schedule() at time_to_run
+            scheduler.schedule_function(self.run_scene_schedule, time_to_run)
+
         else:
             self._call_scene(scene)
+            object.__setattr__(self, 'scenes', {})
 
     def run_scene_schedule(self):
-        current_time = time.time()
+        current_time = math.ceil(time.time())
 
         # Get scenes that have passed the scheduled run time
         # List is sorted and reversed so the most recent one is first
