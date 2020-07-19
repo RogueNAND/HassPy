@@ -145,9 +145,11 @@ class Entity:
 
         thread_id = threading.get_ident()
         if thread_id in push_threads:
-            object.__setattr__(self, key, value)
-            self._modified_values[key] = value
-            push_threads[thread_id].add(self)
+            # Only update HomeAssistant if a change has been made
+            if not hasattr(self, key) or getattr(self, key) != value:
+                object.__setattr__(self, key, value)
+                self._modified_values[key] = value
+                push_threads[thread_id].add(self)
         else:
             object.__setattr__(self, key, value)
 
