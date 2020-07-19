@@ -158,6 +158,10 @@ class Room:
                     entity.add_event_call(func)
         Room._methods_to_watch = {}
 
+    def __init_subclass__(self, **kwargs):
+        super().__init_subclass__(**kwargs)
+        self()
+
     def __iter__(self):
         entities = [e[1] for e in self._entities]
         return entities.__iter__()
