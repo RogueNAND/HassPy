@@ -1,5 +1,5 @@
 from functools import wraps
-import threading
+import threading, time
 
 push_threads = {}
 def push(func):
@@ -11,10 +11,11 @@ def push(func):
             func(*args, **kwargs)
         else:
             push_threads[thread_id] = set()
-            func(*args, **kwargs)
+            result = func(*args, **kwargs)
             for entity in push_threads[thread_id]:
                 entity.push_changes_to_ha()
             del push_threads[thread_id]
+            return result
     return inner
 
 
@@ -29,6 +30,7 @@ class Entity:
         self.id = id
         self.event_calls = set()
         self.state = None
+        self.scenes = {}
         self._modified_values = {}
 
     def toggle(self):
@@ -64,7 +66,6 @@ class Entity:
                 else:
                     scene_activator.run()
 
-
     def _set_attributes_from_json(self, data, state=None):
         if 'new_state' in data:
             data = data['new_state']
@@ -92,6 +93,49 @@ class Entity:
     def compute_service(self):
         """ Override this method """
         return None
+
+    """ Scene control """
+
+    def add_scene(self, scene, delay=0):
+        if delay > 0:
+            time_to_run = time.time() + delay
+            self.scenes[time_to_run] = scene
+            # TODO: Schedule run_scene_schedule() at time_to_run
+        else:
+            self._call_scene(scene)
+
+    def run_scene_schedule(self):
+        current_time = time.time()
+
+        # Get scenes that have passed the scheduled run time
+        # List is sorted and reversed so the most recent one is first
+        scenes_to_run = sorted([
+            (t, scene)
+            for t, scene in self.scenes.items()
+            if current_time >= t
+        ], reverse=True)
+
+        # Run and delete scenes
+        for t, scene in scenes_to_run:
+            self._call_scene(scene)
+            del self.scenes[t]
+
+    def _call_scene(self, scene):
+
+        """ Immediately apply a scene to this entity """
+
+        # Get attributes from scene
+        all_attrs = scene.domain_states.get('all', {})
+        if self._domain in scene.domain_states:
+            self_attrs = scene.domain_states.get(self._domain, {})
+        else:
+            self_attrs = scene.domain_states.get('default', {})
+
+        # Apply attributes
+        for attr, value in all_attrs.items():
+            setattr(self, attr, value)
+        for attr, value in self_attrs.items():
+            setattr(self, attr, value)
 
     def __setattr__(self, key, value):
 
@@ -157,9 +201,9 @@ class Group:
         for entity in self.entities:
             entity.add_event_call(func)
 
-    def _call_method(self, entities, name):
+    def _call_method(self, entities, name, *args, **kwargs):
         for entity in entities:
-            getattr(entity, name)()
+            getattr(entity, name)(*args, **kwargs)
 
     def __iter__(self):
         return self.entities.__iter__()
@@ -178,7 +222,7 @@ class Group:
             # If method
             for e in entities:
                 if callable(getattr(e, item)):
-                    return lambda: self._call_method(entities, item)
+                    return lambda *args, **kw: self._call_method(entities, item, *args, *kw)
 
             all_values = [
                 getattr(e, item)

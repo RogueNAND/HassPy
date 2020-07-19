@@ -160,6 +160,10 @@ class Room:
                 for entity in entities:
                     entity.add_event_call(func)
 
+    def __iter__(self):
+        entities = [e[1] for e in self._entities]
+        return entities.__iter__()
+
     def onchange(*entities):
         def decorator(func):
             Room._methods_to_watch[func] = entities
