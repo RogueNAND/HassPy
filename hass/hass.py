@@ -156,6 +156,7 @@ class Room:
             else:
                 for entity in entities:
                     entity.add_event_call(func)
+        Room._methods_to_watch = {}
 
     def __iter__(self):
         entities = [e[1] for e in self._entities]
