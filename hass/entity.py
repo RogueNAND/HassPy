@@ -216,7 +216,7 @@ class Group:
             # If method
             for e in entities:
                 if callable(getattr(e, item)):
-                    return lambda *args, **kw: self._call_method(entities, item, *args, *kw)
+                    return lambda *args, **kw: self._call_method(entities, item, *args, **kw)
 
             all_values = [
                 getattr(e, item)
