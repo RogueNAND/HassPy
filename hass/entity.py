@@ -85,7 +85,7 @@ class Entity:
             time_to_run = time.time() + delay
 
             # Remove all scenes that were currently scheduled after this new scene
-            for t in filter(lambda x: x[0] + 1 >= time_to_run, self.scenes.values()):
+            for t in filter(lambda x: x + 1 >= time_to_run, self.scenes.keys()):
                 del self.scenes[t]
 
             # Schedule the new scene
