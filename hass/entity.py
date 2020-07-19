@@ -80,7 +80,7 @@ class Entity:
 
     """ Scene control """
 
-    def add_scene(self, scene, delay=0):
+    def add_scene(self, scene, delay=0, filtered=None):
         if delay > 1:
             time_to_run = time.time() + delay
 
@@ -89,7 +89,7 @@ class Entity:
                 del self.scenes[t]
 
             # Schedule the new scene
-            self.scenes[time_to_run] = scene
+            self.scenes[time_to_run] = (scene, filtered)
             scheduler.schedule_function(self.run_scene_schedule, time_to_run)
 
         else:
@@ -102,14 +102,15 @@ class Entity:
         # Get scenes that have passed the scheduled run time
         # List is sorted and reversed so the most recent one is first
         scenes_to_run = sorted([
-            (t, scene)
+            (t, scene[0], scene[1])
             for t, scene in self.scenes.items()
             if current_time >= t
         ], reverse=True)
 
         # Run and delete scenes
-        for t, scene in scenes_to_run:
-            self._call_scene(scene)
+        for t, scene, filtered in scenes_to_run:
+            if filtered is None or filtered(self):
+                self._call_scene(scene)
             del self.scenes[t]
 
     def _call_scene(self, scene):

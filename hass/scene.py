@@ -17,6 +17,6 @@ class Scene:
         })
         self.domain_states = domain_states
 
-    def __call__(self, *entities, delayed=0):
+    def __call__(self, *entities, delayed=0, filter=None):
         for entity in entities:
-            entity.add_scene(self, delayed)
+            entity.add_scene(self, delayed, filtered=filter)
